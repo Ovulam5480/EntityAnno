@@ -13,7 +13,7 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    if: ${{ github.repository == 'GglLfr/EntityAnno' }}
+    if: ${{ github.repository == 'Ovulam5480/EntityAnno' }}
 
     steps:
     - uses: actions/checkout@v4
@@ -42,7 +42,7 @@ jobs:
         chmod +x gradlew
         ./gradlew -P version="${ARTIFACT_VERSION}" -D maven.repo.local="$(pwd)/.out" publishToMavenLocal
         
-        git clone https://${{ secrets.MAVEN_TOKEN_GITHUB }}@github.com/GglLfr/EntityAnnoMaven.git --depth=1 ../EntityAnnoMaven
+        git clone https://${{ secrets.MAVEN_TOKEN_GITHUB }}@github.com/Ovulam5480/EntityAnnoMaven.git --depth=1 ../EntityAnnoMaven
         cp -r .out/* ../EntityAnnoMaven
         cd ../EntityAnnoMaven
         
@@ -50,4 +50,4 @@ jobs:
         git config user.email "actions@github.com"
         git add .
         git commit -m "Publishing for ${ARTIFACT_VERSION}"
-        git push https://${{ secrets.MAVEN_TOKEN_GITHUB }}@github.com/GglLfr/EntityAnnoMaven.git
+        git push https://${{ secrets.MAVEN_TOKEN_GITHUB }}@github.com/Ovulam5480/EntityAnnoMaven.git
