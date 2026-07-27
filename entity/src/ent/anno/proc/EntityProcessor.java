@@ -18,6 +18,8 @@ import mindustry.gen.*;
 
 import javax.annotation.processing.*;
 import javax.lang.model.element.*;
+import javax.lang.model.type.MirroredTypeException;
+import javax.tools.Diagnostic;
 import java.io.*;
 import java.lang.*;
 import java.lang.Class;
@@ -190,6 +192,7 @@ public class EntityProcessor extends BaseProcessor{
                                 .build()
                             );
 
+                        for(var s : comp.getTypeParameters()) intBuilder.addTypeVariable(spec(s));
                         for(var ext : comp.getInterfaces()) if(!isCompInter(conv(ext))) intBuilder.addSuperinterface(spec(ext));
                         for(var dep : deps) intBuilder.addSuperinterface(procName(dep, this::intName));
 
@@ -749,7 +752,14 @@ public class EntityProcessor extends BaseProcessor{
                         .addMethod(MethodSpec.constructorBuilder().addModifiers(PROTECTED).build())
                         .addMethod(creator.build());
 
-                    definitions.add(new EntityDefinition(name, builder, def, typeIsBase ? null : baseClassType, defComps.values().toSeq(), allFieldSpecs.copy()));
+                    Type.ClassType genericTypeMirror = null;
+                    try {
+                        defAnno.genericType();
+                    } catch (MirroredTypeException e) {
+                        genericTypeMirror = (Type.ClassType) e.getTypeMirror();
+                    }
+
+                    definitions.add(new EntityDefinition(name, builder, def, typeIsBase ? null : baseClassType, defComps.values().toSeq(), allFieldSpecs.copy(), genericTypeMirror, defAnno.specific()));
                 }
 
                 var registry = TypeSpec.classBuilder("EntityRegistry")
@@ -887,6 +897,11 @@ public class EntityProcessor extends BaseProcessor{
                     TypeSpec.Builder superclass = null;
                     if(ext != null) superclass = baseClasses.get(name(ext));
 
+                    Seq<TypeName> typeBounds = new Seq<>();
+                    if(def.genericType != null){
+                        typeBounds.add(ClassName.get(def.genericType.tsym.packge().getQualifiedName().toString(), def.genericType.tsym.getSimpleName().toString()));
+                    }
+
                     for(var comp : def.components){
                         imports.addAll(this.imports.get(comp));
 
@@ -896,7 +911,23 @@ public class EntityProcessor extends BaseProcessor{
                             continue;
                         }
 
-                        def.builder.addSuperinterface(spec(inter));
+                        if(def.genericType == null){
+                            for (TypeVariableSymbol s : comp.getTypeParameters()) {
+                                for (Type bound : s.getBounds()) {
+                                    typeBounds.add(TypeName.get(bound));
+                                }
+                            }
+                        }
+
+                        TypeName typeName;
+                        if(inter.getTypeParameters().nonEmpty()) {
+                            String getName = def.specific ? def.genericType.tsym.getSimpleName().toString() : "T";
+                            typeName = ParameterizedTypeName.get(spec(inter), TypeVariableName.get(getName));
+                        }else {
+                            typeName = spec(inter);
+                        }
+                        def.builder.addSuperinterface(typeName);
+
                         for(var s : inter.getEnclosedElements()){
                             if(s.getKind() == METHOD){
                                 var m = (MethodSymbol)s;
@@ -956,6 +987,10 @@ public class EntityProcessor extends BaseProcessor{
                                 if(result != null) def.builder.addMethod(result);
                             }
                         }
+                    }
+
+                    if(!(def.genericType != null && def.specific) && !typeBounds.isEmpty()){
+                        def.builder.addTypeVariable(TypeVariableName.get("T").withBounds((TypeName[]) typeBounds.toArray(TypeName.class)));
                     }
 
                     write(def.builder, imports);
@@ -1233,14 +1268,18 @@ public class EntityProcessor extends BaseProcessor{
         protected final @Nullable ClassSymbol extend;
         protected final Seq<ClassSymbol> components;
         protected final Seq<FieldSpec> fieldSpecs;
+        protected final Type.ClassType genericType;
+        protected final boolean specific;
 
-        public EntityDefinition(String name, TypeSpec.Builder builder, Symbol naming, ClassSymbol extend, Seq<ClassSymbol> components, Seq<FieldSpec> fieldSpecs){
+        public EntityDefinition(String name, TypeSpec.Builder builder, Symbol naming, ClassSymbol extend, Seq<ClassSymbol> components, Seq<FieldSpec> fieldSpecs, Type.ClassType genericType, boolean specific){
             this.name = name;
             this.builder = builder;
             this.naming = naming;
             this.extend = extend;
             this.components = components;
             this.fieldSpecs = fieldSpecs;
+            this.genericType = Objects.equals(genericType.toString(), "java.lang.Void") ? null : genericType;
+            this.specific = specific;
         }
 
         @Override

@@ -75,8 +75,6 @@ allprojects{
             compilerArgs.add("-Xlint:-options")
         }
 
-        sourceCompatibility = "17"
-        targetCompatibility = "8"
 
         doFirst{
             sourceCompatibility = "8"

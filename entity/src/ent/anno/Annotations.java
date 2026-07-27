@@ -52,6 +52,10 @@ public final class Annotations{
 
         /** @return Whether the class is poolable. */
         boolean pooled() default false;
+
+        Class<?> genericType() default Void.class;
+
+        boolean specific() default false;
     }
 
     /** Indicates that this entities (!) class should be mapped. */
