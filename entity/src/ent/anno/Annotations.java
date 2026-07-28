@@ -52,7 +52,7 @@ public final class Annotations{
 
         /** @return Whether the class is poolable. */
         boolean pooled() default false;
-
+        //不要使用无界通配符:<?>
         Class<?> genericType() default Void.class;
 
         boolean specific() default false;
