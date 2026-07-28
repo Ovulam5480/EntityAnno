@@ -18,7 +18,7 @@ import mindustry.gen.*;
 
 import javax.annotation.processing.*;
 import javax.lang.model.element.*;
-import javax.lang.model.type.MirroredTypeException;
+import javax.lang.model.type.*;
 import javax.tools.Diagnostic;
 import java.io.*;
 import java.lang.*;
@@ -192,7 +192,12 @@ public class EntityProcessor extends BaseProcessor{
                                 .build()
                             );
 
-                        for(var s : comp.getTypeParameters()) intBuilder.addTypeVariable(spec(s));
+                        var tree = trees.getTree(comp);
+                        var treeParams = tree instanceof JCClassDecl ? tree.getTypeParameters() : null;
+                        var elemParams = comp.getTypeParameters();
+                        for(int i = 0; i < elemParams.size(); i++){
+                            intBuilder.addTypeVariable(typeVar(comp, elemParams.get(i), treeParams != null && i < treeParams.size() ? treeParams.get(i) : null));
+                        }
                         for(var ext : comp.getInterfaces()) if(!isCompInter(conv(ext))) intBuilder.addSuperinterface(spec(ext));
                         for(var dep : deps) intBuilder.addSuperinterface(procName(dep, this::intName));
 
@@ -912,9 +917,14 @@ public class EntityProcessor extends BaseProcessor{
                         }
 
                         if(def.genericType == null){
-                            for (TypeVariableSymbol s : comp.getTypeParameters()) {
-                                for (Type bound : s.getBounds()) {
-                                    typeBounds.add(TypeName.get(bound));
+                            var tree = trees.getTree(comp);
+                            var treeParams = tree instanceof JCClassDecl ? tree.getTypeParameters() : null;
+                            var elemParams = comp.getTypeParameters();
+                            for(int i = 0; i < elemParams.size(); i++){
+                                var treeBounds = treeParams != null && i < treeParams.size() ? treeParams.get(i).getBounds() : null;
+                                var bounds = elemParams.get(i).getBounds();
+                                for(int j = 0; j < bounds.size(); j++){
+                                    typeBounds.add(boundType(bounds.get(j), treeBounds != null && j < treeBounds.size() ? treeBounds.get(j) : null, comp));
                                 }
                             }
                         }
@@ -990,7 +1000,7 @@ public class EntityProcessor extends BaseProcessor{
                     }
 
                     if(!(def.genericType != null && def.specific) && !typeBounds.isEmpty()){
-                        def.builder.addTypeVariable(TypeVariableName.get("T").withBounds((TypeName[]) typeBounds.toArray(TypeName.class)));
+                        def.builder.addTypeVariable(TypeVariableName.get("T").withBounds((TypeName[]) dedupBounds(typeBounds).toArray(TypeName.class)));
                     }
 
                     write(def.builder, imports);
@@ -1242,6 +1252,141 @@ public class EntityProcessor extends BaseProcessor{
         for(int i = keys.size - 1; i >= 0; i--) builder.append(baseName(comps.get(keys.get(i))));
 
         return builder.toString();
+    }
+
+    /** Deduplicates type bounds, keeping at most one bound per raw type; parameterized bounds are preferred over raw ones. */
+    protected Seq<TypeName> dedupBounds(Seq<TypeName> bounds){
+        var out = new Seq<TypeName>();
+        outer:
+        for(var bound : bounds){
+            var raw = rawType(bound);
+            for(int i = 0; i < out.size; i++){
+                if(!rawType(out.get(i)).equals(raw)) continue;
+                if(bound instanceof ParameterizedTypeName && !(out.get(i) instanceof ParameterizedTypeName)) out.set(i, bound);
+                continue outer;
+            }
+            out.add(bound);
+        }
+        return out;
+    }
+
+    protected TypeName rawType(TypeName type){
+        return type instanceof ParameterizedTypeName parameterized ? parameterized.rawType : type;
+    }
+
+    /**
+     * @return whether the given type can be converted into a {@link TypeName} without losing information.
+     * Unresolvable parameterized types have their symbols erased to {@code <any>} by the compiler, in which
+     * case the source tree must be consulted instead.
+     */
+    protected boolean usable(TypeMirror type){
+        if(type.getKind() == ERROR){
+            if(!(((DeclaredType)type).asElement() instanceof TypeElement elem) || elem.getQualifiedName().contentEquals("<any>")) return false;
+        }
+
+        if(type instanceof DeclaredType declared) for(var arg : declared.getTypeArguments()) if(!usable(arg)) return false;
+        if(type instanceof ArrayType array) return usable(array.getComponentType());
+        if(type instanceof WildcardType wildcard) return (wildcard.getExtendsBound() == null || usable(wildcard.getExtendsBound())) && (wildcard.getSuperBound() == null || usable(wildcard.getSuperBound()));
+
+        return true;
+    }
+
+    /** Converts a type into a {@link TypeName}, falling back to the source tree when the type is unresolvable. */
+    protected TypeName boundType(TypeMirror type, JCTree tree, ClassSymbol comp){
+        if(usable(type)) return spec(type);
+        return tree == null ? TypeName.OBJECT : treeType(tree, comp);
+    }
+
+    /** Converts a type parameter into a {@link TypeVariableName}, rebuilding erased bounds from the source tree. */
+    protected TypeVariableName typeVar(ClassSymbol comp, TypeParameterElement elem, JCTypeParameter tree){
+        var bounds = elem.getBounds();
+        for(var bound : bounds){
+            if(!usable(bound)){
+                var fixed = new TypeName[bounds.size()];
+                for(int i = 0; i < fixed.length; i++) fixed[i] = boundType(bounds.get(i), tree != null && i < tree.getBounds().size() ? tree.getBounds().get(i) : null, comp);
+
+                return TypeVariableName.get(elem.getSimpleName().toString(), fixed);
+            }
+        }
+
+        return spec(elem);
+    }
+
+    /** Converts a source tree type expression into a {@link TypeName}, resolving names with the component's imports. */
+    protected TypeName treeType(JCTree tree, ClassSymbol comp){
+        if(tree instanceof JCTypeApply apply){
+            var raw = treeType(apply.clazz, comp);
+            if(!(raw instanceof ClassName)) return raw;
+
+            var args = new TypeName[apply.arguments.size()];
+            for(int i = 0; i < args.length; i++) args[i] = treeType(apply.arguments.get(i), comp);
+            return ParameterizedTypeName.get((ClassName)raw, args);
+        }else if(tree instanceof JCWildcard wildcard){
+            return switch(wildcard.kind.kind){
+                case EXTENDS -> WildcardTypeName.subtypeOf(treeType(wildcard.inner, comp));
+                case SUPER -> WildcardTypeName.supertypeOf(treeType(wildcard.inner, comp));
+                default -> WildcardTypeName.subtypeOf(TypeName.OBJECT);
+            };
+        }else if(tree instanceof JCArrayTypeTree array){
+            return ArrayTypeName.of(treeType(array.elemtype, comp));
+        }else if(tree instanceof JCPrimitiveTypeTree primitive){
+            return switch(primitive.typetag){
+                case BOOLEAN -> TypeName.BOOLEAN;
+                case BYTE -> TypeName.BYTE;
+                case SHORT -> TypeName.SHORT;
+                case INT -> TypeName.INT;
+                case LONG -> TypeName.LONG;
+                case CHAR -> TypeName.CHAR;
+                case FLOAT -> TypeName.FLOAT;
+                case DOUBLE -> TypeName.DOUBLE;
+                case VOID -> TypeName.VOID;
+                default -> TypeName.OBJECT;
+            };
+        }else if(tree instanceof JCIdent ident){
+            return resolveName(ident.name.toString(), comp);
+        }else if(tree instanceof JCFieldAccess access){
+            return ClassName.bestGuess(access.toString());
+        }else{
+            return TypeName.OBJECT;
+        }
+    }
+
+    protected TypeName resolveName(String name, ClassSymbol comp){
+        for(var param : comp.getTypeParameters()) if(param.getSimpleName().contentEquals(name)) return TypeVariableName.get(name);
+
+        var qualified = qualifiedName(name, comp);
+        if(qualified != null) return ClassName.bestGuess(qualified);
+
+        for(var other : comps.values()) if(intName(other).equals(name)) return procName(other, this::intName);
+
+        return ClassName.bestGuess(name);
+    }
+
+    /** @return the qualified name of a type with the given simple name, based on the component's source imports. */
+    protected String qualifiedName(String name, ClassSymbol comp){
+        var stars = new Seq<String>();
+        for(var imp : imports.get(comp, () -> new Seq<>())){
+            var s = imp.trim();
+            if(!s.startsWith("import ")) continue;
+
+            s = s.substring(7).trim();
+            if(s.endsWith(";")) s = s.substring(0, s.length() - 1).trim();
+            if(s.startsWith("static ")) continue;
+
+            if(s.endsWith(".*")){
+                stars.add(s.substring(0, s.length() - 1));
+            }else if(s.substring(s.lastIndexOf('.') + 1).equals(name)){
+                return s;
+            }
+        }
+
+        for(var prefix : stars) if(elements.getTypeElement(prefix + name) != null) return prefix + name;
+
+        var pkg = comp.packge().getQualifiedName().toString();
+        if(!pkg.isEmpty() && elements.getTypeElement(pkg + "." + name) != null) return pkg + "." + name;
+        if(elements.getTypeElement("java.lang." + name) != null) return "java.lang." + name;
+
+        return null;
     }
 
     @Override
