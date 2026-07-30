@@ -19,6 +19,7 @@ import mindustry.gen.*;
 import javax.annotation.processing.*;
 import javax.lang.model.element.*;
 import javax.lang.model.type.MirroredTypeException;
+import javax.lang.model.type.TypeMirror;
 import javax.tools.Diagnostic;
 import java.io.*;
 import java.lang.*;
@@ -136,20 +137,20 @@ public class EntityProcessor extends BaseProcessor{
                     }).get(anno(e, Wrap.class).value(), () -> new Seq<>(false)).add(e);
                 }
 
-                serializer = TypeIOResolver.resolve(this);
-                groups.putAll(
-                    comp(Entityc.class), "all",
-                    comp(Playerc.class), "player",
-                    comp(Bulletc.class), "bullet",
-                    comp(Unitc.class), "unit",
-                    comp(Buildingc.class), "build",
-                    comp(Syncc.class), "sync",
-                    comp(Drawc.class), "draw",
-                    comp(Firec.class), "fire",
-                    comp(Puddlec.class), "puddle",
-                    comp(WorldLabelc.class), "label",
-                    comp(PowerGraphUpdaterc.class), "powerGraph"
-                );
+//                serializer = TypeIOResolver.resolve(this);
+//                groups.putAll(
+//                    comp(Entityc.class), "all",
+//                    comp(Playerc.class), "player",
+//                    comp(Bulletc.class), "bullet",
+//                    comp(Unitc.class), "unit",
+//                    comp(Buildingc.class), "build",
+//                    comp(Syncc.class), "sync",
+//                    comp(Drawc.class), "draw",
+//                    comp(Firec.class), "fire",
+//                    comp(Puddlec.class), "puddle",
+//                    comp(WorldLabelc.class), "label",
+//                    comp(PowerGraphUpdaterc.class), "powerGraph"
+//                );
 
                 for(var s : elements.getPackageElement("mindustry.gen").getEnclosedElements()){
                     var name = name(s);
@@ -192,7 +193,7 @@ public class EntityProcessor extends BaseProcessor{
                                 .build()
                             );
 
-                        for(var s : comp.getTypeParameters()) intBuilder.addTypeVariable(spec(s));
+                        for(var s : comp.getTypeParameters()) intBuilder.addTypeVariable(tvar(comp, s));
                         for(var ext : comp.getInterfaces()) if(!isCompInter(conv(ext))) intBuilder.addSuperinterface(spec(ext));
                         for(var dep : deps) intBuilder.addSuperinterface(procName(dep, this::intName));
 
@@ -913,9 +914,7 @@ public class EntityProcessor extends BaseProcessor{
 
                         if(def.genericType == null){
                             for (TypeVariableSymbol s : comp.getTypeParameters()) {
-                                for (Type bound : s.getBounds()) {
-                                    typeBounds.add(TypeName.get(bound));
-                                }
+                                typeBounds.addAll(tvarBounds(comp, s));
                             }
                         }
 
@@ -1233,6 +1232,147 @@ public class EntityProcessor extends BaseProcessor{
             comp.packge().toString().contains(packageFetch) ? "mindustry.gen" : packageName,
             name.get(comp)
         );
+    }
+
+    /**
+     * Returns a {@link TypeVariableName} of a component's type parameter. Bounds that refer to types
+     * generated within the same processing round are attributed by javac as the erroneous {@code <any>}
+     * type; those are reconstructed from the type parameter's source tree instead.
+     */
+    protected TypeVariableName tvar(ClassSymbol owner, TypeParameterElement var){
+        return TypeVariableName.get(name(var), (TypeName[])tvarBounds(owner, var).toArray(TypeName.class));
+    }
+
+    /**
+     * Returns the bounds of a component's type parameter, repairing erroneous {@code <any>} bounds
+     * via {@link #repairType(JCExpression, ClassSymbol)}.
+     */
+    protected Seq<TypeName> tvarBounds(ClassSymbol owner, TypeParameterElement var){
+        Seq<TypeName> out = new Seq<>();
+        var mirrors = var.getBounds();
+        var bounds = tvarTree(owner, var);
+
+        for(int i = 0; i < mirrors.size(); i++){
+            TypeName bound = healthy(mirrors.get(i));
+            if(bound == null){
+                bound = bounds != null && i < bounds.size() ? repairType(bounds.get(i), owner) : TypeName.OBJECT;
+            }
+
+            out.add(bound);
+        }
+
+        return out;
+    }
+
+    /** Fetches the declared bounds of a type parameter from the owner's source tree, or null if unavailable. */
+    protected List<JCExpression> tvarTree(ClassSymbol owner, TypeParameterElement var){
+        var tree = (JCClassDecl)trees.getTree(owner);
+        if(tree == null) return null;
+
+        for(var param : tree.getTypeParameters()){
+            if(param.getName().contentEquals(var.getSimpleName())) return param.getBounds();
+        }
+
+        return null;
+    }
+
+    /** Returns the {@link TypeName} of a type mirror, or null if it contains unresolvable {@code <any>} error types. */
+    protected TypeName healthy(TypeMirror mirror){
+        try{
+            var out = TypeName.get(mirror);
+            return out.toString().contains("<any>") ? null : out;
+        }catch(Throwable ignored){
+            return null;
+        }
+    }
+
+    /**
+     * Reconstructs a {@link TypeName} from the source tree of a type parameter's bound, resolving
+     * not-yet-generated component interfaces by name. Only used for bounds that javac could not
+     * attribute (the {@code <any>} error type).
+     */
+    protected TypeName repairType(JCExpression expr, ClassSymbol owner){
+        if(expr instanceof JCIdent){
+            return repairIdent(((JCIdent)expr).getName().toString(), owner);
+        }else if(expr instanceof JCFieldAccess){
+            var qname = expr.toString();
+            var type = elements.getTypeElement(qname);
+            return type == null ? ClassName.bestGuess(qname) : ClassName.get(type);
+        }else if(expr instanceof JCTypeApply){
+            var apply = (JCTypeApply)expr;
+            var raw = repairType(apply.clazz, owner);
+
+            if(raw instanceof ClassName){
+                Seq<TypeName> args = new Seq<>();
+                for(var arg : apply.arguments) args.add(repairType(arg, owner));
+
+                return ParameterizedTypeName.get((ClassName)raw, args.toArray(TypeName.class));
+            }
+
+            return raw;
+        }else if(expr instanceof JCWildcard){
+            var wild = (JCWildcard)expr;
+            if(wild.kind.kind == BoundKind.EXTENDS) return WildcardTypeName.subtypeOf(repairType((JCExpression)wild.inner, owner));
+            if(wild.kind.kind == BoundKind.SUPER) return WildcardTypeName.supertypeOf(repairType((JCExpression)wild.inner, owner));
+
+            return WildcardTypeName.subtypeOf(TypeName.OBJECT);
+        }else if(expr instanceof JCAnnotatedType){
+            return repairType(((JCAnnotatedType)expr).underlyingType, owner);
+        }else if(expr instanceof JCArrayTypeTree){
+            return ArrayTypeName.of(repairType(((JCArrayTypeTree)expr).elemtype, owner));
+        }
+
+        return TypeName.OBJECT;
+    }
+
+    /** Resolves a simple type name found in a broken type parameter bound. */
+    protected TypeName repairIdent(String name, ClassSymbol owner){
+        //type variables of the owner component
+        for(var param : owner.getTypeParameters()){
+            if(param.getSimpleName().contentEquals(name)) return TypeVariableName.get(name);
+        }
+
+        //generated component interfaces
+        if(name.endsWith("c")){
+            var dep = comp(compName(name));
+            if(dep != null) return procName(dep, this::intName);
+        }
+
+        //component classes
+        if(name.endsWith("Comp")){
+            var dep = comp(name);
+            if(dep != null) return ClassName.get(dep.packge().getQualifiedName().toString(), name);
+        }
+
+        //the owner component's own package
+        var type = elements.getTypeElement(owner.packge().getQualifiedName() + "." + name);
+        if(type != null) return ClassName.get(type);
+
+        //imports of the owner component
+        var imports = this.imports.get(owner);
+        if(imports != null){
+            for(var imp : imports){
+                var path = imp.trim();
+                if(path.startsWith("import ")) path = path.substring(7);
+                if(path.startsWith("static ")) path = path.substring(7);
+                if(path.endsWith(";")) path = path.substring(0, path.length() - 1);
+                path = path.trim();
+
+                if(path.endsWith(".*")){
+                    var pack = path.substring(0, path.length() - 2);
+
+                    type = elements.getTypeElement(pack + "." + name);
+                    if(type != null) return ClassName.get(type);
+                    if(pack.equals(packageName)) return ClassName.get(pack, name);
+                }else if(path.substring(path.lastIndexOf('.') + 1).equals(name)){
+                    type = elements.getTypeElement(path);
+                    return type == null ? ClassName.bestGuess(path) : ClassName.get(type);
+                }
+            }
+        }
+
+        //assume a type generated into the target package
+        return ClassName.get(packageName, name);
     }
 
     protected String createName(OrderedMap<String, ClassSymbol> comps){
