@@ -137,20 +137,20 @@ public class EntityProcessor extends BaseProcessor{
                     }).get(anno(e, Wrap.class).value(), () -> new Seq<>(false)).add(e);
                 }
 
-//                serializer = TypeIOResolver.resolve(this);
-//                groups.putAll(
-//                    comp(Entityc.class), "all",
-//                    comp(Playerc.class), "player",
-//                    comp(Bulletc.class), "bullet",
-//                    comp(Unitc.class), "unit",
-//                    comp(Buildingc.class), "build",
-//                    comp(Syncc.class), "sync",
-//                    comp(Drawc.class), "draw",
-//                    comp(Firec.class), "fire",
-//                    comp(Puddlec.class), "puddle",
-//                    comp(WorldLabelc.class), "label",
-//                    comp(PowerGraphUpdaterc.class), "powerGraph"
-//                );
+                serializer = TypeIOResolver.resolve(this);
+                groups.putAll(
+                    comp(Entityc.class), "all",
+                    comp(Playerc.class), "player",
+                    comp(Bulletc.class), "bullet",
+                    comp(Unitc.class), "unit",
+                    comp(Buildingc.class), "build",
+                    comp(Syncc.class), "sync",
+                    comp(Drawc.class), "draw",
+                    comp(Firec.class), "fire",
+                    comp(Puddlec.class), "puddle",
+                    comp(WorldLabelc.class), "label",
+                    comp(PowerGraphUpdaterc.class), "powerGraph"
+                );
 
                 for(var s : elements.getPackageElement("mindustry.gen").getEnclosedElements()){
                     var name = name(s);
