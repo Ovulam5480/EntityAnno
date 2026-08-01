@@ -195,7 +195,7 @@ public class EntityProcessor extends BaseProcessor{
 
                         for(var s : comp.getTypeParameters()) intBuilder.addTypeVariable(tvar(comp, s));
                         for(var ext : comp.getInterfaces()) if(!isCompInter(conv(ext))) intBuilder.addSuperinterface(spec(ext));
-                        for(var dep : deps) intBuilder.addSuperinterface(procName(dep, this::intName));
+                        for(var dep : deps) intBuilder.addSuperinterface(interType(comp, dep));
 
                         ObjectSet<String> signatures = new ObjectSet<>();
                         for(var s : comp.getEnclosedElements()){
@@ -989,7 +989,7 @@ public class EntityProcessor extends BaseProcessor{
                     }
 
                     if(!(def.genericType != null && def.specific) && !typeBounds.isEmpty()){
-                        def.builder.addTypeVariable(TypeVariableName.get("T").withBounds((TypeName[]) typeBounds.toArray(TypeName.class)));
+                        def.builder.addTypeVariable(TypeVariableName.get("T").withBounds((TypeName[]) dedupBounds(typeBounds).toArray(TypeName.class)));
                     }
 
                     write(def.builder, imports);
@@ -1232,6 +1232,48 @@ public class EntityProcessor extends BaseProcessor{
             comp.packge().toString().contains(packageFetch) ? "mindustry.gen" : packageName,
             name.get(comp)
         );
+    }
+
+    /**
+     * Returns the generated interface type of a dependency component, parameterized with the owner
+     * component's own type variables when the dependency declares type parameters.
+     */
+    protected TypeName interType(ClassSymbol owner, ClassSymbol dep){
+        var raw = procName(dep, this::intName);
+
+        var params = dep.getTypeParameters();
+        var ownerParams = owner.getTypeParameters();
+        if(params.isEmpty() || ownerParams.size() < params.size()) return raw;
+
+        Seq<TypeName> args = new Seq<>();
+        for(int i = 0; i < params.size(); i++) args.add(TypeVariableName.get(name(ownerParams.get(i))));
+
+        return ParameterizedTypeName.get(raw, args.toArray(TypeName.class));
+    }
+
+    /**
+     * Deduplicates type bounds by their raw type, preferring parameterized variants over raw ones,
+     * and drops the implicit {@link Object} bound, which is illegal alongside other bounds.
+     */
+    protected Seq<TypeName> dedupBounds(Seq<TypeName> bounds){
+        Seq<TypeName> out = new Seq<>();
+        for(var bound : bounds){
+            if(bound.equals(TypeName.OBJECT)) continue;
+
+            var index = out.indexOf(b -> rawName(b).equals(rawName(bound)));
+            if(index == -1){
+                out.add(bound);
+            }else if(out.get(index) instanceof ClassName && bound instanceof ParameterizedTypeName){
+                out.set(index, bound);
+            }
+        }
+
+        return out;
+    }
+
+    /** Returns the raw {@link ClassName} of a bound, unwrapping parameterized types. */
+    protected TypeName rawName(TypeName name){
+        return name instanceof ParameterizedTypeName ? ((ParameterizedTypeName)name).rawType : name;
     }
 
     /**
