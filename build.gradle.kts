@@ -12,8 +12,8 @@ val javapoetVersion = providers.gradleProperty("javapoetVersion").get()
 
 fun commonPom(pom: MavenPom){
     pom.apply{
-        url = "https://github.com/GglLfr/EntityAnno"
-        inceptionYear = "2024"
+        url = "https://github.com/Ovulam5480/EntityAnno"
+        inceptionYear = "2026"
 
         licenses{
             license{
@@ -25,7 +25,7 @@ fun commonPom(pom: MavenPom){
 
         issueManagement{
             system = "GitHub Issue Tracker"
-            url = "https://github.com/GglLfr/EntityAnno/issues"
+            url = "https://github.com/Ovulam5480/EntityAnno/issues"
         }
     }
 }
@@ -34,7 +34,7 @@ allprojects{
     apply(plugin = "java")
 
     sourceSets["main"].java.setSrcDirs(listOf(layout.projectDirectory.dir("src")))
-    group = "com.github.GglLfr.EntityAnno"
+    group = "com.github.Ovulam5480.EntityAnno"
 
     repositories{
         google()
@@ -119,14 +119,14 @@ project(":entity"){
 project(":"){
     apply(plugin = "java-gradle-plugin")
 
-    group = "com.github.GglLfr"
+    group = "com.github.Ovulam5480"
 
     lateinit var plugin: Provider<PluginDeclaration>
     gradlePlugin{
         isAutomatedPublishing = false
 
         plugin = plugins.register("entityAnno"){
-            id = "com.github.GglLfr.EntityAnno"
+            id = "com.github.Ovulam5480.EntityAnno"
             displayName = "EntityAnno"
             description = "Utility tools for generating Mindustry custom entity component classes."
             implementationClass = "ent.EntityAnnoPlugin"
