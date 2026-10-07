@@ -8,6 +8,38 @@ features:
 - Supports both release and bleeding-edge Mindustry version hashes.
 - A [dedicated template](https://github.com/GlennFolker/MindustryModTemplate).
 
+## Configuration
+
+`:fetchComps` downloads the vanilla component sources from GitHub whenever the build runs. On networks where
+`raw.githubusercontent.com` is unreachable, point it at a mirror:
+
+```properties
+# gradle.properties
+downloadMirror = https://ghproxy.net
+```
+
+Alternatively, route Gradle through a proxy:
+
+```properties
+systemProp.https.proxyHost = 127.0.0.1
+systemProp.https.proxyPort = 7890
+```
+
+Both are also settable on the `entityAnno` extension, if you prefer keeping them in the build script:
+
+```kotlin
+configure<ent.EntityAnnoExtension>{
+    downloadMirror = "https://ghproxy.net"
+}
+```
+
+| Property         | Default  | Description                                                                                       |
+|------------------|----------|---------------------------------------------------------------------------------------------------|
+| `downloadMirror` | *(unset)*| Proxy prefix for raw source downloads, prepended verbatim to the download URL.                     |
+| `apiMirror`      | *(unset)*| Proxy prefix for GitHub API requests. Most mirrors only proxy raw downloads, not the API, so this is rarely needed. |
+| `maxRetries`     | `3`      | Attempts per file, including the first one.                                                        |
+| `threads`        | `4`      | Maximum number of concurrent downloads.                                                            |
+
 ## Contributing
 
 This project is licensed under [GNU GPL v3](/LICENSE).

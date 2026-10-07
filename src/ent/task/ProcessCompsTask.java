@@ -9,8 +9,10 @@ import org.gradle.api.tasks.*;
 import javax.inject.*;
 import java.io.*;
 import java.nio.file.*;
+import org.gradle.work.*;
 
 /** {@code :processComps} task, processes Mindustry component sources as EntityAnno template inputs. */
+@DisableCachingByDefault(because = "Output is derived from the network-fetched sources of the non-cacheable :fetchComps task")
 public abstract class ProcessCompsTask extends DefaultTask{
     /** @return {@link FetchCompsTask#getOutputDirectory()}. */
     public abstract @InputFiles @PathSensitive(PathSensitivity.RELATIVE) ConfigurableFileCollection getSources();

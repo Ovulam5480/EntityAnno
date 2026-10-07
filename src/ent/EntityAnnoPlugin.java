@@ -29,6 +29,15 @@ public class EntityAnnoPlugin implements Plugin<Project>{
         var genSrcPackage = ext.getGenSrcPackage();
         var genPackage = ext.getGenPackage();
 
+        // Fetching defaults. These can be overridden through the `entityAnno` extension, or through
+        // plain project properties of the same name in `gradle.properties` (e.g. `downloadMirror = ...`),
+        // which is what most mod projects prefer since it avoids touching the build script.
+        var providers = project.getProviders();
+        ext.getApiMirror().convention(providers.gradleProperty("apiMirror").orElse(""));
+        ext.getDownloadMirror().convention(providers.gradleProperty("downloadMirror").orElse(""));
+        ext.getMaxRetries().convention(providers.gradleProperty("maxRetries").map(Integer::parseInt).orElse(3));
+        ext.getThreads().convention(providers.gradleProperty("threads").map(Integer::parseInt).orElse(4));
+
         // Apply 'java' plugin.
         plugins.apply("java");
 
@@ -54,6 +63,10 @@ public class EntityAnnoPlugin implements Plugin<Project>{
 
             t.getMindustryVersion().set(mindustryVersion);
             t.getMindustryType().set(mindustryType);
+            t.getApiMirror().set(ext.getApiMirror());
+            t.getDownloadMirror().set(ext.getDownloadMirror());
+            t.getMaxRetries().set(ext.getMaxRetries());
+            t.getThreads().set(ext.getThreads());
         });
 
         var processComps = tasks.register("processComps", ProcessCompsTask.class, t -> {
