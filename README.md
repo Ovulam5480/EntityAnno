@@ -40,6 +40,25 @@ configure<ent.EntityAnnoExtension>{
 | `maxRetries`     | `3`      | Attempts per file, including the first one.                                                        |
 | `threads`        | `4`      | Maximum number of concurrent downloads.                                                            |
 
+## Generic entities
+
+Component type parameters are retained on generated component interfaces and base classes.
+`@EntityDef` defaults to `GenericMode.NONE`, preserving the existing entity generation behavior.
+Opt in with `genericMode` (the enum is `EntityDef.GenericMode`):
+
+| Mode | Configuration | Generated entity shape |
+|------|---------------|------------------------|
+| `PRESERVE` | `genericName = "T"` (default) | `Entity<T extends ...> implements Componentc<T>` |
+| `BIND` | `genericType = "your.package.MyBuilding<your.package.Item>"` | `Entity implements Componentc<MyBuilding<Item>>` |
+| `SELF` | No additional properties | `Entity implements Componentc<Entity>` |
+
+All generic components share one argument; each component may declare at most one type parameter.
+`PRESERVE` combines their upper bounds. `BIND` requires fully qualified names, including nested
+arguments; `SELF` requires the generated entity to satisfy every component bound. Invalid
+configuration is rejected, and javac validates the generated types against their bounds.
+Method-local type parameters remain independent. Generic component source must be available
+during processing; recompile generic components rather than using cached method bodies.
+
 ## Contributing
 
 This project is licensed under [GNU GPL v3](/LICENSE).

@@ -18,7 +18,8 @@ public class TypeIOResolver{
     public static ClassSerializer resolve(BaseProcessor proc){
         var out = new ClassSerializer(new ObjectMap<>(), new ObjectMap<>(), new ObjectMap<>(), new ObjectMap<>());
 
-        var handlers = Seq.with(proc.<ClassSymbol>with(TypeIOHandler.class)).add(proc.conv(TypeIO.class));
+        var handlers = Seq.with(proc.conv(TypeIO.class));
+        handlers.addAll(proc.<ClassSymbol>with(TypeIOHandler.class));
         for(var handler : handlers){
             for(var e : handler.getEnclosedElements()){
                 if(!(e instanceof MethodSymbol m)) continue;

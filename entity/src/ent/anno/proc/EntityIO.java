@@ -110,7 +110,7 @@ public class EntityIO{
         }
     }
 
-    public void writeSync(MethodSpec.Builder method, boolean write, Seq<VarSymbol> allFields){
+    public void writeSync(MethodSpec.Builder method, boolean write, Seq<VarSymbol> allFields, boolean interpolate){
         this.method = method;
         this.write = write;
 
@@ -124,15 +124,17 @@ public class EntityIO{
         }else{
             var rev = revisions.peek();
 
-            st("if(lastUpdated != 0) updateSpacing = $T.timeSinceMillis(lastUpdated)", spec(Time.class));
-            st("lastUpdated = $T.millis()", spec(Time.class));
-            st("boolean islocal = isLocal()");
+            if(interpolate){
+                st("if(lastUpdated != 0) updateSpacing = $T.timeSinceMillis(lastUpdated)", spec(Time.class));
+                st("lastUpdated = $T.millis()", spec(Time.class));
+                st("boolean islocal = isLocal()");
+            }
 
             for(var field : rev.fields){
                 var var = allFields.find(s -> name(s).equals(field.name));
                 if(var == null || anno(var, NoSync.class) != null) continue;
 
-                boolean sf = anno(var, SyncField.class) != null, sl = anno(var, SyncLocal.class) != null;
+                boolean sf = interpolate && anno(var, SyncField.class) != null, sl = interpolate && anno(var, SyncLocal.class) != null;
                 if(sl) cont("if(!islocal)");
                 if(sf) st(field.name + lastSuffix + " = this." + field.name);
 
@@ -151,7 +153,7 @@ public class EntityIO{
                 }
             }
 
-            st("afterSync()");
+            if(interpolate) st("afterSync()");
         }
     }
 
@@ -207,6 +209,12 @@ public class EntityIO{
 
         if(isPrimitive(type)){
             s(type.equals("boolean") ? "bool" : String.valueOf(type.charAt(0)), field);
+        }else if((serializer.writers.containsKey(type) || (network && serializer.netWriters.containsKey(type))) && write){
+            st("$L(write, $L)", network ? serializer.getNetWriter(type, null) : serializer.writers.get(type), field);
+        }else if(serializer.mutatorReaders.containsKey(type) && !write && !field.replace(" = ", "").contains(" ") && !field.isEmpty()){
+            st("$L$L(read, $L)", field, serializer.mutatorReaders.get(type), field.replace(" = ", ""));
+        }else if(serializer.readers.containsKey(type) && !write){
+            st("$L$L(read)", field, serializer.readers.get(type));
         }else if(
             proc.instanceOf(type, "mindustry.ctype.Content") &&
             !type.equals("mindustry.ai.UnitStance") &&
@@ -217,12 +225,6 @@ public class EntityIO{
             }else{
                 st(field + "$T.content.getByID($T.$L, read.s())", spec(Vars.class), spec(ContentType.class), name(type).toLowerCase().replace("type", ""));
             }
-        }else if((serializer.writers.containsKey(type) || (network && serializer.netWriters.containsKey(type))) && write){
-            st("$L(write, $L)", network ? serializer.getNetWriter(type, null) : serializer.writers.get(type), field);
-        }else if(serializer.mutatorReaders.containsKey(type) && !write && !field.replace(" = ", "").contains(" ") && !field.isEmpty()){
-            st("$L$L(read, $L)", field, serializer.mutatorReaders.get(type), field.replace(" = ", ""));
-        }else if(serializer.readers.containsKey(type) && !write){
-            st("$L$L(read)", field, serializer.readers.get(type));
         }else if(type.endsWith("[]")){
             var rawType = type.substring(0, type.length() - 2);
             if(write){
@@ -243,7 +245,12 @@ public class EntityIO{
             econt();
         }else if(type.startsWith("arc.struct") && type.contains("<")){
             var struct = type.substring(0, type.indexOf("<"));
-            var generic = type.substring(type.indexOf("<") + 1, type.indexOf(">"));
+            var generic = type.substring(type.indexOf("<") + 1, type.lastIndexOf(">"));
+
+            if(!canSerialize(generic, network)){
+                Log.warn("Missing serialization code for collection element '@' in '@'", generic, name);
+                return;
+            }
 
             if(struct.equals("arc.struct.Queue") || struct.equals("arc.struct.Seq")){
                 if(write){
@@ -273,6 +280,20 @@ public class EntityIO{
         }else{
             Log.warn("Missing serialization code for type '@' in '@'", type, name);
         }
+    }
+
+    private boolean canSerialize(String type, boolean network){
+        type = refactors.get(type.replace(proc.packageName + ".", ""), type);
+        if(isPrimitive(type)) return true;
+        if(proc.instanceOf(type, "mindustry.ctype.Content") &&
+            !type.equals("mindustry.ai.UnitStance") && !type.equals("mindustry.ai.UnitCommand")) return true;
+        if(serializer.readers.containsKey(type) &&
+            (serializer.writers.containsKey(type) || network && serializer.netWriters.containsKey(type))) return true;
+        if(type.endsWith("[]")) return canSerialize(type.substring(0, type.length() - 2), network);
+        if(type.startsWith("arc.struct.Seq<") || type.startsWith("arc.struct.Queue<")){
+            return canSerialize(type.substring(type.indexOf('<') + 1, type.lastIndexOf('>')), network);
+        }
+        return false;
     }
 
     private void cont(String text, Object... fmt){

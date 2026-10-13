@@ -239,6 +239,12 @@ public abstract class BaseProcessor implements Processor{
         return TypeVariableName.get(type);
     }
 
+    protected static List<TypeVariableName> typeVariables(TypeElement type){
+        var result = new ArrayList<TypeVariableName>();
+        for(var parameter : type.getTypeParameters()) result.add(TypeVariableName.get(parameter));
+        return result;
+    }
+
     public static ParameterSpec spec(VariableElement var){
         return ParameterSpec.get(var);
     }

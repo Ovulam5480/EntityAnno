@@ -57,6 +57,19 @@ public final class Annotations{
 
         /** @return Whether the class is poolable. */
         boolean pooled() default false;
+
+        /** @return How component type parameters are supplied to this entity. */
+        GenericMode genericMode() default GenericMode.NONE;
+
+        /** @return The shared entity type parameter name in PRESERVE mode. */
+        String genericName() default "T";
+
+        /** @return A fully qualified Java reference type in BIND mode, including type arguments. */
+        String genericType() default "";
+
+        enum GenericMode{
+            NONE, PRESERVE, BIND, SELF
+        }
     }
 
     /**

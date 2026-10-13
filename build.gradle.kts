@@ -109,6 +109,15 @@ project(":entity"){
     }
 
     sourceSets["main"].resources.setSrcDirs(listOf(layout.projectDirectory.dir("assets")))
+    sourceSets["test"].java.setSrcDirs(listOf(layout.projectDirectory.dir("test")))
+    val genericCheck = tasks.register<JavaExec>("genericCheck"){
+        dependsOn(tasks.named("testClasses"))
+        classpath = sourceSets["test"].runtimeClasspath
+        mainClass.set("ent.anno.proc.EntityGenericsCheck")
+        jvmArgs(providers.gradleProperty("org.gradle.jvmargs").get().split(Regex("\\s+")).filter{it.startsWith("--add-opens")})
+    }
+    tasks.named<Test>("test"){ failOnNoDiscoveredTests.set(false) }
+    tasks.named("check"){ dependsOn(genericCheck) }
     dependencies{
         implementation("Anuken:Mindustry:$mindustryVersion")
         implementation("com.squareup:javapoet:$javapoetVersion")

@@ -60,6 +60,7 @@ public class EntityProcessor extends BaseProcessor{
     protected Seq<EntityDefinition> definitions = new Seq<>();
 
     protected ClassSerializer serializer;
+    protected EntityGenerics activeGenerics;
 
     {
         rounds = 2;
@@ -197,6 +198,7 @@ public class EntityProcessor extends BaseProcessor{
                         var intBuilder = TypeSpec.interfaceBuilder(intName(comp))
                             .addOriginatingElement(comp)
                             .addModifiers(PUBLIC, ABSTRACT)
+                            .addTypeVariables(typeVariables(comp))
                             .addAnnotation(spec(EntityInterface.class))
                             .addAnnotation(
                                 AnnotationSpec.builder(spec(SuppressWarnings.class))
@@ -206,7 +208,7 @@ public class EntityProcessor extends BaseProcessor{
 
                         for(var ext : comp.getInterfaces())
                             if(!isCompInter(conv(ext))) intBuilder.addSuperinterface(spec(ext));
-                        for(var dep : deps) intBuilder.addSuperinterface(procName(dep, this::intName));
+                        for(var dep : deps) intBuilder.addSuperinterface(procSpec(dep, c -> intName(c), comp));
 
                         ObjectSet<String> signatures = new ObjectSet<>();
                         for(var s : comp.getEnclosedElements()){
@@ -270,6 +272,7 @@ public class EntityProcessor extends BaseProcessor{
                                 var tname = baseName(comp);
                                 var base = TypeSpec.classBuilder(tname)
                                     .addModifiers(PUBLIC, ABSTRACT)
+                                    .addTypeVariables(typeVariables(comp))
                                     .addOriginatingElement(comp);
 
                                 for(var dep : baseDeps){
@@ -289,7 +292,7 @@ public class EntityProcessor extends BaseProcessor{
                                         }
                                     }
 
-                                    base.addSuperinterface(procName(dep, this::intName));
+                                    base.addSuperinterface(procSpec(dep, c -> intName(c), comp));
                                 }
 
                                 baseClasses.put(tname, base);
@@ -369,7 +372,7 @@ public class EntityProcessor extends BaseProcessor{
 
                     var contentField = def instanceof VarSymbol v && is(v, PUBLIC, STATIC) && is(v.enclClass(), PUBLIC) && types.isSubtype(v.type, conv(UnitType.class).type) ? v : null;
                     if(def instanceof VarSymbol && contentField == null) err(
-                        "@EntityDef when used on fields only accept `public static UnitType`. " +
+                        "@EntityDef on field `" + desc(def) + "` only accepts `public static UnitType` declared in a public class. " +
                             "Don't forget to call `EntityRegistry.registerUnits()` *once*, *after* all unit types have been constructed.",
                         def
                     );
@@ -412,8 +415,18 @@ public class EntityProcessor extends BaseProcessor{
                         defGroups.add(val);
                     }
 
+                    EntityGenerics generics;
+                    try{
+                        generics = new EntityGenerics(defAnno, ClassName.get(packageName, name), defComps.values(), elements);
+                    }catch(IllegalArgumentException exception){
+                        err(exception.getMessage(), def);
+                        continue;
+                    }
+                    activeGenerics = generics;
                     var builder = TypeSpec.classBuilder(name)
                         .addModifiers(PUBLIC)
+                        .addTypeVariables(generics.enabled() ? generics.declarations :
+                            def instanceof TypeElement type ? typeVariables(type) : List.of())
                         .addAnnotation(
                             AnnotationSpec.builder(SuppressWarnings.class)
                                 .addMember("value", "{$S, $S, $S}", "all", "unchecked", "deprecation")
@@ -455,7 +468,7 @@ public class EntityProcessor extends BaseProcessor{
                                     continue;
                                 }
 
-                                var field = FieldSpec.builder(spec(v.type), fname);
+                                var field = FieldSpec.builder(activeGenerics.replace(spec(v.type)), fname);
                                 if(is(v, STATIC)){
                                     field.addModifiers(STATIC);
                                     if(is(v, FINAL)) field.addModifiers(FINAL);
@@ -471,8 +484,8 @@ public class EntityProcessor extends BaseProcessor{
                                     field.addModifiers(PUBLIC);
                                 }
 
-                                var init = src.varInitializers.get(desc(v));
-                                if(init != null) field.initializer(init);
+                                var init = genericInitializer(v, src);
+                                if(init != null) field.initializer("$L", init);
 
                                 for(var anno : v.getAnnotationMirrors()) field.addAnnotation(spec(anno));
                                 var spec = field.build();
@@ -609,14 +622,14 @@ public class EntityProcessor extends BaseProcessor{
                         boolean isPrivate = is(m, PRIVATE);
                         var methBuilder = MethodSpec.methodBuilder(mname)
                             .addModifiers(isPrivate ? PRIVATE : PUBLIC)
-                            .returns(spec(m.getReturnType()));
+                            .returns(genericType(m.getReturnType(), m));
 
                         if(!isPrivate && !is(m, STATIC)) methBuilder.addAnnotation(spec(Override.class));
                         if(is(m, STATIC)) methBuilder.addModifiers(STATIC);
 
-                        for(var t : m.getTypeParameters()) methBuilder.addTypeVariable(spec(t));
-                        for(var t : m.getThrownTypes()) methBuilder.addException(spec(t));
-                        for(var v : m.params) methBuilder.addParameter(spec(v));
+                        for(var t : m.getTypeParameters()) methBuilder.addTypeVariable(TypeVariableName.get(name(t), t.getBounds().stream().map(b -> genericType(b, m)).toArray(TypeName[]::new)));
+                        for(var t : m.getThrownTypes()) methBuilder.addException(genericType(t, m));
+                        for(var v : m.params) methBuilder.addParameter(genericType(v.asType(), m), name(v));
 
                         boolean writeBlock = m.getReturnType().getKind() == VOID && entries.size > 1;
                         if(isAny(m, ABSTRACT, NATIVE) && entries.size == 1 && anno(m, InternalImpl.class) == null){
@@ -717,7 +730,7 @@ public class EntityProcessor extends BaseProcessor{
                             }
 
                             if((mname.equals("readSync") || mname.equals("writeSync"))){
-                                io.writeSync(methBuilder, mname.equals("writeSync"), allFields);
+                                io.writeSync(methBuilder, mname.equals("writeSync"), allFields, isSync);
                             }
 
                             if((mname.equals("readSyncManual") || mname.equals("writeSyncManual"))){
@@ -783,7 +796,7 @@ public class EntityProcessor extends BaseProcessor{
                             var src = getSource(v.enclClass());
                             var desc = desc(v);
                             resetBuilder.addStatement("this.$L = $L", spec.name, src.varInitializers.containsKey(desc)
-                                ? src.varInitializers.get(desc)
+                                ? genericInitializer(v, src)
                                 : spec.type.isPrimitive() ? getDefault(spec.type.toString()) : "null"
                             );
                         }
@@ -793,7 +806,7 @@ public class EntityProcessor extends BaseProcessor{
 
                     var creator = MethodSpec.methodBuilder("create")
                         .addModifiers(PUBLIC, STATIC)
-                        .returns(ClassName.get(packageName, name));
+                        .addTypeVariables(activeGenerics.declarations).returns(activeGenerics.entityType(ClassName.get(packageName, name)));
 
                     if(defAnno.pooled()){
                         creator.addStatement("return $T.obtain($T.class, $T::new)", spec(Pools.class), ClassName.get(packageName, name), ClassName.get(packageName, name));
@@ -805,7 +818,7 @@ public class EntityProcessor extends BaseProcessor{
                         .addMethod(MethodSpec.constructorBuilder().addModifiers(PROTECTED).build())
                         .addMethod(creator.build());
 
-                    definitions.add(new EntityDefinition(name, builder, def, typeIsBase ? null : baseClassType, defComps.values().toSeq(), allFieldSpecs.copy()));
+                    definitions.add(new EntityDefinition(name, builder, def, typeIsBase ? null : baseClassType, defComps.values().toSeq(), allFieldSpecs.copy(), generics));
                 }
 
                 var registry = TypeSpec.classBuilder("EntityRegistry")
@@ -977,7 +990,7 @@ public class EntityProcessor extends BaseProcessor{
                             vanillaSuper = vanillaBaseClasses.get(baseName);
                             def.builder.superclass(spec(vanillaSuper));
                         }else{
-                            def.builder.superclass(ClassName.get(packageName, baseName));
+                            def.builder.superclass(def.generics.applied(ClassName.get(packageName, baseName), def.extend));
                         }
                     }
 
@@ -991,7 +1004,7 @@ public class EntityProcessor extends BaseProcessor{
 
                     TypeSpec.Builder superclass = null;
                     if(def.extend != null){
-                        superclass = baseClasses.get(name(def.extend));
+                        superclass = baseClasses.get(baseName(def.extend));
                     }
 
                     for(var comp : def.components){
@@ -1004,7 +1017,7 @@ public class EntityProcessor extends BaseProcessor{
                             continue;
                         }
 
-                        def.builder.addSuperinterface(spec(inter));
+                        def.builder.addSuperinterface(def.generics.applied(spec(inter), inter));
                         for(var s : inter.getEnclosedElements()){
                             if(s.getKind() == METHOD){
                                 var m = (MethodSymbol)s;
@@ -1018,7 +1031,7 @@ public class EntityProcessor extends BaseProcessor{
                                     result = MethodSpec.methodBuilder(var)
                                         .addModifiers(PUBLIC)
                                         .addAnnotation(spec(Override.class))
-                                        .returns(spec(m.getReturnType()))
+                                        .returns(def.generics.replace(spec(m.getReturnType())))
                                         .addStatement("return $L", var)
                                         .build();
                                 }else if(!Seq.with(field.annotations).contains(f -> f.type.toString().equals("@" + fName(ReadOnly.class)))){
@@ -1032,7 +1045,7 @@ public class EntityProcessor extends BaseProcessor{
                                 }
 
                                 if(result != null){
-                                    if(superclass != null){
+                                    if(superclass != null && !def.generics.enabled()){
                                         var superField = Seq.with(superclass.fieldSpecs).find(f -> f.name.equals(var));
                                         if(superField != null){
                                             var ret = result.returnType;
@@ -1147,7 +1160,27 @@ public class EntityProcessor extends BaseProcessor{
 
             var desc = desc(m);
             if(!isAny(m, ABSTRACT, NATIVE) && src.methodBlocks.containsKey(desc)){
-                var block = src.methodBlocks.get(desc).substitute((writeBlock && anno(m, BreakAll.class) == null) ? blockName : null);
+                var methodBlock = src.methodBlocks.get(desc);
+                var parameters = new HashMap<VarSymbol, String>();
+                for(int i = 0; i < m.params().size(); i++){
+                    var parameter = m.params().get(i);
+                    var generatedName = methBuilder.parameters.get(i).name;
+                    if(!name(parameter).equals(generatedName)) parameters.put(parameter, generatedName);
+                }
+                if(activeGenerics.enabled() || !parameters.isEmpty()){
+                    var tree = trees.getTree(m);
+                    if(tree == null) throw new IllegalArgumentException("Component source must be recompiled for type or parameter substitution: " + m.enclClass());
+                    var replacements = new HashMap<String, String>();
+                    if(activeGenerics.enabled()){
+                        for(var parameter : m.enclClass().getTypeParameters()){
+                            String key = name(parameter);
+                            if(activeGenerics.variables.containsKey(key)) replacements.put(key, activeGenerics.argument.toString());
+                        }
+                        for(var parameter : m.getTypeParameters()) replacements.remove(name(parameter));
+                    }
+                    methodBlock = new Source.MethodBlock(tree.body, replacements, parameters);
+                }
+                var block = methodBlock.substitute((writeBlock && anno(m, BreakAll.class) == null) ? blockName : null);
                 if(!block.replace("\n", "").replaceAll("\\s+", "").isEmpty()){
                     if(writeBlock) methBuilder.beginControlFlow("$L:", blockName);
                     methBuilder.addCode(block);
@@ -1273,6 +1306,24 @@ public class EntityProcessor extends BaseProcessor{
         );
     }
 
+    protected TypeName procSpec(ClassSymbol comp, Func<ClassSymbol, String> name, ClassSymbol owner){
+        var raw = procName(comp, name);
+        var parameters = comp.getTypeParameters();
+        if(parameters.isEmpty()) return raw;
+
+        var args = new TypeName[parameters.size()];
+        var ownerParameters = owner.getTypeParameters();
+        for(int i = 0; i < parameters.size(); i++){
+            var parameter = parameters.get(i);
+            var match = ownerParameters.stream()
+                .filter(t -> t.getSimpleName().contentEquals(parameter.getSimpleName()))
+                .findFirst().orElse(null);
+            if(match == null) return raw;
+            args[i] = TypeVariableName.get(match);
+        }
+        return ParameterizedTypeName.get(raw, args);
+    }
+
     protected String createName(OrderedMap<String, ClassSymbol> comps){
         var keys = comps.orderedKeys();
 
@@ -1300,6 +1351,25 @@ public class EntityProcessor extends BaseProcessor{
         return Collections.unmodifiableSet(opts);
     }
 
+    String genericInitializer(VarSymbol field, Source source){
+        String original = source.varInitializers.get(desc(field));
+        if(original == null || !activeGenerics.enabled() || field.enclClass().getTypeParameters().isEmpty()) return original;
+        var tree = trees.getTree(field);
+        if(!(tree instanceof com.sun.tools.javac.tree.JCTree.JCVariableDecl declaration) || declaration.init == null){
+            err("Generic component source must be recompiled: " + field.enclClass(), field);
+            return original;
+        }
+        var replacements = new HashMap<String, String>();
+        for(var parameter : field.enclClass().getTypeParameters()) replacements.put(name(parameter), activeGenerics.argument.toString());
+        return Source.expression(declaration.init, replacements);
+    }
+
+    protected TypeName genericType(javax.lang.model.type.TypeMirror type, MethodSymbol method){
+        var shadowed = new HashSet<String>();
+        for(var parameter : method.getTypeParameters()) shadowed.add(name(parameter));
+        return activeGenerics.replace(spec(type), shadowed);
+    }
+
     public static class EntityDefinition{
         protected final String name;
         protected final TypeSpec.Builder builder;
@@ -1307,14 +1377,16 @@ public class EntityProcessor extends BaseProcessor{
         protected final @Nullable ClassSymbol extend;
         protected final Seq<ClassSymbol> components;
         protected final Seq<FieldSpec> fieldSpecs;
+        protected final EntityGenerics generics;
 
-        public EntityDefinition(String name, TypeSpec.Builder builder, Symbol naming, ClassSymbol extend, Seq<ClassSymbol> components, Seq<FieldSpec> fieldSpecs){
+        public EntityDefinition(String name, TypeSpec.Builder builder, Symbol naming, ClassSymbol extend, Seq<ClassSymbol> components, Seq<FieldSpec> fieldSpecs, EntityGenerics generics){
             this.name = name;
             this.builder = builder;
             this.naming = naming;
             this.extend = extend;
             this.components = components;
             this.fieldSpecs = fieldSpecs;
+            this.generics = generics;
         }
 
         @Override
